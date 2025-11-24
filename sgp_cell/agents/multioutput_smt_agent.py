@@ -13,12 +13,9 @@ class MultiOutputSmtAgent:
         self,
         ini_X: Tensor,
         ini_y: Tensor,
-        n_jobs=-1,
         **model_kwargs,
     ):
-        self.n_jobs = n_jobs
         ini_X, ini_y = torch.atleast_2d(ini_X), torch.atleast_2d(ini_y)
-        self.out_dim = ini_y.size(-1)
 
         self.in_dim, self.out_dim = ini_X.size(-1), ini_y.size(-1)
         self.X_train = ini_X.clone()

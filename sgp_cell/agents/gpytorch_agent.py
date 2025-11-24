@@ -1,7 +1,5 @@
 from typing import Literal
 import torch
-import numpy as np
-import gpytorch
 from torch import Tensor
 from gpytorch.kernels import RBFKernel
 from botorch.models import SingleTaskGP
