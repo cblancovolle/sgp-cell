@@ -128,13 +128,31 @@ class PCAOnlineTrainer:
     def learn_one(self, x_new: Tensor, y_new: Tensor):
         self.buffer.append((x_new, y_new))
         if len(self.buffer) < self.min_points:
-            return {}
+            return dict(
+                n_agents=self.n_agents,
+                n_neighbors=0,
+                n_updated=0,
+                n_created=0,
+                point_ingested=False,
+                min_mahalanobis_dist=np.nan,
+                neighbors=[],
+                agents_selected=[],
+            )
         if self.n_agents == 0:
             self.create_agent(*self.buffer_data)
             self.previous_neighbors = torch.as_tensor(
                 [self.n_agents - 1], dtype=torch.long
             )
-            return {}
+            return dict(
+                n_agents=self.n_agents,
+                n_neighbors=0,
+                n_updated=1,
+                n_created=1,
+                point_ingested=False,
+                min_mahalanobis_dist=np.nan,
+                neighbors=[],
+                agents_selected=[],
+            )
 
         # check neighbors
         x_new_projected = self.project(x_new)  # (n_agents, k_components)
@@ -198,6 +216,7 @@ class PCAOnlineTrainer:
             n_agents=self.n_agents,
             n_neighbors=len(neighbors),
             n_updated=len(agents_to_update),
+            n_created=int((not point_has_been_ingested) and (len(neighbors) == 0)),
             point_ingested=point_has_been_ingested,
             min_mahalanobis_dist=distances.min().numpy(),
             neighbors=neighbors.numpy(),

@@ -1,0 +1,207 @@
+import os
+import sys
+
+sys.path.append(".")
+
+import torch
+import tqdm
+import minari
+import json
+import time
+import argparse
+import numpy as np
+import matplotlib.pyplot as plt
+from minari import MinariDataset
+from sgp_cell.trainers import PCAOnlineTrainer
+from sgp_cell.agents import MultiOutputSmtAgent
+from pathlib import Path
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Run your experiment with specified parameters."
+    )
+
+    # Required parameter
+    parser.add_argument(
+        "--name", type=str, required=True, help="Name of the experiment"
+    )
+
+    # Optional parameters with defaults
+    parser.add_argument(
+        "--dataset_id",
+        type=str,
+        default="mujoco/hopper/medium-v0",
+        help="ID of the dataset to use for training",
+    )
+    parser.add_argument(
+        "--train_size", type=int, default=100, help="Number of training episodes"
+    )
+    parser.add_argument(
+        "--test_size", type=int, default=20, help="Number of test episodes"
+    )
+    parser.add_argument(
+        "--eval_freq",
+        type=int,
+        default=1000,
+        help="Evaluation frequency in number of steps",
+    )
+    parser.add_argument(
+        "--corr",
+        type=str,
+        choices=["abs_exp", "squar_exp", "matern32", "matern52"],
+        default="squar_exp",
+        help="Kernel type to use in agents",
+    )
+    parser.add_argument(
+        "--poly",
+        type=str,
+        choices=["constant", "linear", "quadratic"],
+        default="constant",
+        help="Regression function type",
+    )
+    parser.add_argument(
+        "--k_components",
+        type=int,
+        default=3,
+        help="Number of components for PCA in agents",
+    )
+    parser.add_argument(
+        "--reconstruct_th",
+        type=float,
+        default=0.2,
+        help="Reconstruction error threshold for PCA (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--neighbor_confidence",
+        type=float,
+        default=0.95,
+        help="Neighborhood confidence threshold (0.0-1.0)",
+    )
+
+    args = parser.parse_args()
+    return args
+
+
+args = parse_args()
+
+run_id = f"{args.name}_{int(time.time())}"
+log_path = Path(f"logs/{run_id}/training_log.jsonl")
+eval_log_path = Path(f"logs/{run_id}/training_eval_log.jsonl")
+
+
+def sanitize(obj):
+    if isinstance(obj, dict):
+        return {k: sanitize(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [sanitize(x) for x in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
+
+def log_entry(log_path: Path, entry: dict):
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = sanitize(entry)
+    with log_path.open("a") as f:
+        f.write(json.dumps(entry) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def evaluate(trainer: PCAOnlineTrainer, dataset: MinariDataset):
+    errs = []
+    with tqdm.trange(len(dataset)) as pbar:
+        for ep_id in pbar:
+            ep = dataset[ep_id]
+            for i in range(len(ep) - 1):
+                obs, action, next_obs = (
+                    ep.observations[i],
+                    ep.actions[i],
+                    ep.observations[i + 1],
+                )
+                x_new = torch.as_tensor(np.hstack([obs, action])).view(1, -1)
+                y_new = torch.as_tensor(next_obs).view(1, -1)
+
+                if trainer.n_agents > 0:
+                    with torch.no_grad():
+                        mu, var = trainer.predict_one(x_new)
+                else:
+                    mu = torch.full_like(y_new, torch.nan)
+                errs += [mu - y_new]
+        errs = np.array(errs)
+        rmse = np.sqrt((errs**2).mean())
+    return {"rmse": rmse}
+
+
+# ====== Dataset Import ======
+dataset_id = args.dataset_id
+dataset = minari.load_dataset(dataset_id)
+train_dataset, test_dataset = minari.split_dataset(
+    dataset, sizes=[args.train_size, args.test_size], seed=42
+)
+print("Observation space:", dataset.observation_space)
+print("Action space:", dataset.action_space)
+print("Total episodes:", dataset.total_episodes)
+print("Total steps:", dataset.total_steps)
+
+state_dim = dataset.observation_space.shape[0]
+action_dim = dataset.action_space.shape[0]
+
+# ====== Instanciate Trainer ======
+trainer = PCAOnlineTrainer(
+    in_dim=state_dim + action_dim,
+    out_dim=state_dim,
+    agent_cls=MultiOutputSmtAgent,
+    neighbor_confidence=args.neighbor_confidence,
+    min_points=state_dim + action_dim + 1,
+    k_components=args.k_components,
+    agent_kwargs=dict(
+        poly=args.poly,
+        corr=args.corr,
+    ),
+)
+
+# ====== Training Loop ======
+step = 0
+eval_freq = args.eval_freq
+for ep_id, ep in enumerate(train_dataset):
+    trainer.reset()
+    with tqdm.trange(len(ep) - 1) as pbar:
+        for i in pbar:
+            obs, action, next_obs = (
+                ep.observations[i],
+                ep.actions[i],
+                ep.observations[i + 1],
+            )
+            x_new = torch.as_tensor(np.hstack([obs, action])).view(1, -1)
+            y_new = torch.as_tensor(next_obs).view(1, -1)
+
+            if trainer.n_agents > 0:
+                with torch.no_grad():
+                    mu, var = trainer.predict_one(x_new)
+            else:
+                mu = torch.full_like(y_new, torch.nan)
+
+            err = np.abs((mu - y_new).mean().numpy())
+
+            infos = trainer.learn_one(x_new, y_new)
+            infos["abs_err"] = err
+            infos["episode_id"] = ep_id
+            infos["step"] = step
+            log_entry(log_path, infos)
+
+            pbar.set_description(f"[Ep {ep_id} - Agents {trainer.n_agents}]")
+            if step % eval_freq == 0:
+                eval_infos = evaluate(trainer, test_dataset)
+                eval_infos["step"] = step
+                eval_infos["n_retained"] = np.sum(
+                    [a.current_mem_size for a in trainer.agents]
+                )
+                log_entry(eval_log_path, eval_infos)
+            step += 1
