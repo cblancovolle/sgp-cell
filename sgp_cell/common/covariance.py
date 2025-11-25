@@ -50,12 +50,12 @@ def mahalanobis2(x, P, mu):
     Args:
         x (Tensor): (n_dim,)
         P (Tensor): precision matrix (n_dim, n_dim)
-        mu (Tensor): mean (state_dim)
+        mu (Tensor): mean (state_dim,)
 
     Returns:
         Tensor: (1,)
     """
-    return (x - mu).T @ P @ (x - mu)
+    return (x - mu).view(-1, 1).T @ P @ (x - mu)
 
 
 batch_mahalanobis2 = torch.vmap(mahalanobis2, in_dims=(None, 0, 0))

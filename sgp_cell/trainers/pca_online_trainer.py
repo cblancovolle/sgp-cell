@@ -221,5 +221,5 @@ class PCAOnlineTrainer:
         vars = torch.vstack(vars)
 
         # check for most confident agent
-        most_confident_idx = torch.argmin(vars.mean(dim=-1))
+        most_confident_idx = torch.argmin(vars.mean(dim=1))
         return mus[most_confident_idx], vars[most_confident_idx]
