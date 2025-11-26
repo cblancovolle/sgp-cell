@@ -15,6 +15,11 @@ from minari import MinariDataset
 from sgp_cell.trainers import PCAOnlineTrainer
 from sgp_cell.agents import MultiOutputSmtAgent
 from pathlib import Path
+from sklearn.metrics import (
+    root_mean_squared_error,
+    mean_squared_error,
+    mean_absolute_error,
+)
 
 
 def parse_args():
@@ -45,6 +50,12 @@ def parse_args():
         type=int,
         default=1000,
         help="Evaluation frequency in number of steps",
+    )
+    parser.add_argument(
+        "--min_points",
+        type=int,
+        default=None,
+        help="Min number of points to instanciate agent",
     )
     parser.add_argument(
         "--corr",
@@ -115,7 +126,8 @@ def log_entry(log_path: Path, entry: dict):
 
 
 def evaluate(trainer: PCAOnlineTrainer, dataset: MinariDataset):
-    errs = []
+    y_preds = []
+    y_test = []
     with tqdm.trange(len(dataset)) as pbar:
         for ep_id in pbar:
             ep = dataset[ep_id]
@@ -133,10 +145,21 @@ def evaluate(trainer: PCAOnlineTrainer, dataset: MinariDataset):
                         mu, var = trainer.predict_one(x_new)
                 else:
                     mu = torch.full_like(y_new, torch.nan)
-                errs += [mu - y_new]
-        errs = np.array(errs)
-        rmse = np.sqrt((errs**2).mean())
-    return {"rmse": rmse}
+
+                y_preds += [mu.numpy()]
+                y_test += [y_new.numpy()]
+    y_preds = np.vstack(y_preds)
+    y_test = np.vstack(y_test)
+
+    try:
+        rmse = root_mean_squared_error(y_preds, y_test)
+        mse = mean_squared_error(y_preds, y_test)
+        mae = mean_absolute_error(y_preds, y_test)
+    except ValueError:
+        rmse = np.nan
+        mse = np.nan
+        mae = np.nan
+    return {"rmse": rmse, "mse": mse, "mae": mae}
 
 
 # ====== Dataset Import ======
@@ -159,8 +182,9 @@ trainer = PCAOnlineTrainer(
     out_dim=state_dim,
     agent_cls=MultiOutputSmtAgent,
     neighbor_confidence=args.neighbor_confidence,
-    min_points=state_dim + action_dim + 1,
+    min_points=state_dim + action_dim + 1 if not args.min_points else args.min_points,
     k_components=args.k_components,
+    reconstruct_threshold=args.reconstruct_th,
     agent_kwargs=dict(
         poly=args.poly,
         corr=args.corr,
