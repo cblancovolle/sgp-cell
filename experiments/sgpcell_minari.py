@@ -89,6 +89,24 @@ def parse_args():
         default=0.95,
         help="Neighborhood confidence threshold (0.0-1.0)",
     )
+    parser.add_argument(
+        "--confidence_steepness",
+        type=float,
+        default=2.0,
+        help="Steepness of agent confidence curve",
+    )
+    parser.add_argument(
+        "--confidence_forget",
+        type=float,
+        default=0.2,
+        help="Confidence forget lambda factor (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--destroy_th",
+        type=float,
+        default=0.2,
+        help="Confidence forget destroy threshold",
+    )
 
     args = parser.parse_args()
     return args
@@ -185,6 +203,9 @@ trainer = PCAOnlineTrainer(
     min_points=state_dim + action_dim + 1 if not args.min_points else args.min_points,
     k_components=args.k_components,
     reconstruct_threshold=args.reconstruct_th,
+    confidence_norm_steepness=args.confidence_steepness,
+    confidence_forget_lambd=args.confidence_forget,
+    confidence_destroy_th=args.destroy_th,
     agent_kwargs=dict(
         poly=args.poly,
         corr=args.corr,
