@@ -13,7 +13,8 @@ class MultiOutputSmtAgent:
         self,
         ini_X: Tensor,
         ini_y: Tensor,
-        **model_kwargs,
+        model_kwargs: dict,
+        param_coeff=0.1,
     ):
         ini_X, ini_y = torch.atleast_2d(ini_X), torch.atleast_2d(ini_y)
 
@@ -21,6 +22,7 @@ class MultiOutputSmtAgent:
         self.X_train = ini_X.clone()
         self.y_train = ini_y.clone()
         self.model_kwargs = model_kwargs
+        self.param_coef = param_coeff
 
         self.model = self.build_model(self.X_train, self.y_train)
 
@@ -75,7 +77,7 @@ class MultiOutputSmtAgent:
 
     def loss(self, model: List[GPX], X: Tensor, y: Tensor):
         log_likelihood = np.log(self._likelihoods(model)).mean()
-        l = compute_aic(X.size(0), log_likelihood)
+        l = compute_aic(X.size(0), log_likelihood, alpha=self.param_coef)
         return l
 
     def learn_one(self, x_new: Tensor, y_new: Tensor) -> bool:

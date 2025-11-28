@@ -38,6 +38,7 @@ class PCAOnlineTrainer:
         self.buffer = deque([], maxlen=min_points)
         self.agents: list[Agent] = []
 
+        self.k_closest = 4
         self.k_components = k_components
         self.reconstruct_threshold = reconstruct_threshold
         self.var = torch.empty((0, in_dim))  # for standardization
@@ -230,7 +231,48 @@ class PCAOnlineTrainer:
                 self.pca_mean[id] = projected_mean
                 self.pca_Vt[id] = Vt[: self.k_components]
 
-        # update confidence
+        # update confidence for single neighbor
+        if n_neighbors == 1:
+            closest_values, closest_agents = torch.topk(
+                distances.view(-1), k=min(self.k_closest, self.n_agents), largest=False
+            )
+            if not torch.isin(neighbors, closest_agents):
+                closest_agents = torch.cat((neighbors, closest_agents)).view(-1, 1)
+                closest_values = distances[closest_agents]
+
+            closest_mus, _ = self._predict_one(x_new, closest_agents)
+            activations = torch.exp(-0.5 * closest_values).view(-1, 1)
+            total_activation = torch.sum(activations) + 1e-12
+            weights = activations / total_activation
+            w_mu = torch.sum(closest_mus * weights, dim=0)
+            E = torch.abs(y_new - w_mu).mean()  # (out_dim,) -> baseline error
+
+            mask = (
+                torch.arange(len(closest_agents))
+                != torch.where(closest_agents == neighbors[0])[0]
+            )
+            total_activation_mi = torch.sum(activations[mask]) + 1e-12
+            weights_mi = activations[mask] / total_activation_mi
+            w_mu_mi = torch.sum(closest_mus[mask] * weights_mi, dim=0)
+            Emi = [torch.abs(y_new.view(-1) - w_mu_mi).mean()]
+            Emi = torch.stack(Emi)  # (n_neighbors,)
+            Ci = torch.tanh(self.confidence_norm_steepness * ((Emi - E) / E))
+
+            # update confidence
+            lmb = self.confidence_forget_lmbd
+            self.confidence[neighbors] = (
+                self.confidence[neighbors] * (1 - lmb) + lmb * Ci.view(-1, 1)
+            ).float()
+
+            # destroy too bad agents
+            agents_to_destroy = neighbors[
+                (
+                    self.confidence[neighbors] < -self.confidence_destroy_threshold
+                ).squeeze()
+            ]
+            self.destroy_agent(agents_to_destroy)
+
+        # update confidence for multiple neighbors
         if n_neighbors > 1:
             n_mus, _ = self._predict_one(x_new, neighbors)
             activations = torch.exp(-0.5 * distances[neighbors]).view(-1, 1)
@@ -297,24 +339,20 @@ class PCAOnlineTrainer:
 
     def predict_one(self, x: Tensor, k=4):
         # check k closest
-        distances = self.distances(x.view(1, -1)).view(-1)
-        closest_values, closest_agents = torch.topk(
-            distances, k=min(k, self.n_agents), largest=False
-        )
-        activations = torch.exp(-0.5 * closest_values).view(-1, 1)
+        relative_reconstruction_error = self.reconstruction_error(x)
+        reconstruct_mask = relative_reconstruction_error < self.reconstruct_threshold
+        distances = self.distances(x.view(1, -1))
+        neighbors_mask = (distances <= self.mahalanobis_neighbor_confidence).view(
+            self.n_agents
+        ) & reconstruct_mask
+        neighbors = torch.where(neighbors_mask)[0]
+        n_neighbors = len(neighbors)
 
-        # predict
-        mus, vars = self._predict_one(x, closest_agents)
-
-        # print(mus.shape, vars.shape, activations.shape)
-        # weighted mean
-        # total_activation = torch.sum(activations)
-        # w_mu = torch.sum(mus * activations, dim=0) / total_activation
-        # w_var = (
-        #     torch.sum(activations * (vars + (mus - w_mu) ** 2), dim=0)
-        #     / total_activation
-        # )
-        # return w_mu, w_var
+        if n_neighbors == 0:
+            closest_values, neighbors = torch.topk(
+                distances.view(-1), k=min(k, self.n_agents), largest=False
+            )
+        mus, vars = self._predict_one(x, neighbors)
 
         # check for most confident agent
         most_confident_idx = torch.argmin(vars.mean(dim=1))

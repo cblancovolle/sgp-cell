@@ -107,6 +107,12 @@ def parse_args():
         default=0.2,
         help="Confidence forget destroy threshold",
     )
+    parser.add_argument(
+        "--aic_param_coeff",
+        type=float,
+        default=0.1,
+        help="Influence of parameters in aic objective in agent updates",
+    )
 
     args = parser.parse_args()
     return args
@@ -207,8 +213,11 @@ trainer = PCAOnlineTrainer(
     confidence_forget_lambd=args.confidence_forget,
     confidence_destroy_th=args.destroy_th,
     agent_kwargs=dict(
-        poly=args.poly,
-        corr=args.corr,
+        model_kwargs=dict(
+            poly=args.poly,
+            corr=args.corr,
+        ),
+        param_coeff=args.aic_param_coeff,
     ),
 )
 
