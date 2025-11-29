@@ -8,6 +8,7 @@ import tqdm
 import minari
 import json
 import time
+import pickle
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
@@ -30,6 +31,13 @@ def parse_args():
     # Required parameter
     parser.add_argument(
         "--name", type=str, required=True, help="Name of the experiment"
+    )
+
+    parser.add_argument(
+        "--log_snapshot",
+        type=bool,
+        default=True,
+        help="Whether to log the snapshots of the trainer or not.",
     )
 
     # Optional parameters with defaults
@@ -113,6 +121,12 @@ def parse_args():
         default=0.1,
         help="Influence of parameters in aic objective in agent updates",
     )
+    parser.add_argument(
+        "--out_dim",
+        type=int,
+        default=slice(None),
+        help="Index of the dim to model in state vector",
+    )
 
     args = parser.parse_args()
     return args
@@ -122,6 +136,7 @@ args = parse_args()
 
 run_id = f"{args.name}_{int(time.time())}"
 log_path = Path(f"logs/{run_id}/training_log.jsonl")
+snapshot_path = Path(f"logs/{run_id}/snapshots/")
 eval_log_path = Path(f"logs/{run_id}/training_eval_log.jsonl")
 
 
@@ -149,6 +164,13 @@ def log_entry(log_path: Path, entry: dict):
         os.fsync(f.fileno())
 
 
+def log_snapshot(log_path: Path, entry: dict, step: int):
+    path = log_path / f"snapshot_{step}.pkl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        pickle.dump(entry, f)
+
+
 def evaluate(trainer: PCAOnlineTrainer, dataset: MinariDataset):
     y_preds = []
     y_test = []
@@ -162,7 +184,7 @@ def evaluate(trainer: PCAOnlineTrainer, dataset: MinariDataset):
                     ep.observations[i + 1],
                 )
                 x_new = torch.as_tensor(np.hstack([obs, action])).view(1, -1)
-                y_new = torch.as_tensor(next_obs).view(1, -1)
+                y_new = torch.as_tensor(next_obs[args.out_dim]).view(1, -1)
 
                 if trainer.n_agents > 0:
                     with torch.no_grad():
@@ -203,7 +225,7 @@ action_dim = dataset.action_space.shape[0]
 # ====== Instanciate Trainer ======
 trainer = PCAOnlineTrainer(
     in_dim=state_dim + action_dim,
-    out_dim=state_dim,
+    out_dim=1 if isinstance(args.out_dim, int) else state_dim,
     agent_cls=MultiOutputSmtAgent,
     neighbor_confidence=args.neighbor_confidence,
     min_points=state_dim + action_dim + 1 if not args.min_points else args.min_points,
@@ -234,7 +256,7 @@ for ep_id, ep in enumerate(train_dataset):
                 ep.observations[i + 1],
             )
             x_new = torch.as_tensor(np.hstack([obs, action])).view(1, -1)
-            y_new = torch.as_tensor(next_obs).view(1, -1)
+            y_new = torch.as_tensor(next_obs[args.out_dim]).view(1, -1)
 
             if trainer.n_agents > 0:
                 with torch.no_grad():
@@ -248,6 +270,8 @@ for ep_id, ep in enumerate(train_dataset):
             infos["abs_err"] = err
             infos["episode_id"] = ep_id
             infos["step"] = step
+            if isinstance(args.out_dim, int):
+                infos["out_dim_id"] = args.out_dim
             log_entry(log_path, infos)
 
             pbar.set_description(f"[Ep {ep_id} - Agents {trainer.n_agents}]")
@@ -258,4 +282,6 @@ for ep_id, ep in enumerate(train_dataset):
                     [a.current_mem_size for a in trainer.agents]
                 )
                 log_entry(eval_log_path, eval_infos)
+                if args.log_snapshot:
+                    log_snapshot(snapshot_path, trainer.snapshot(), step)
             step += 1

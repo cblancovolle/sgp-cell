@@ -57,6 +57,22 @@ class PCAOnlineTrainer:
         X, y = map(torch.vstack, zip(*self.buffer))
         return X.double(), y.double()
 
+    def snapshot(self):
+        return {
+            "in_dim": self.in_dim,
+            "out_dim": self.out_dim,
+            "n_retained": [a.current_mem_size for a in self.agents],
+            "var": self.var.cpu().numpy(),
+            "mean": self.mean.cpu().numpy(),
+            "pca_var": self.pca_var.cpu().numpy(),
+            "pca_mean": self.pca_mean.cpu().numpy(),
+            "pca_Vt": self.pca_Vt.cpu().numpy(),
+            "confidence": self.confidence.cpu().numpy(),
+            "retained_points": [
+                (a.X_train.cpu().numpy(), a.y_train.cpu().numpy()) for a in self.agents
+            ],
+        }
+
     def reset(self):
         self.buffer.clear()
 

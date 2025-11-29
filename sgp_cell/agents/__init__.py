@@ -2,8 +2,14 @@ from torch import Tensor
 from .gpytorch_agent import GPytorchAgent
 from .smt_agent import SmtAgent
 from .multioutput_smt_agent import MultiOutputSmtAgent
+from .multioutput_sklearn_agent import MultiOutputSklearnAgent
 
-__all__ = ["GPytorchAgent", "SmtAgent", "MultiOutputSmtAgent"]
+__all__ = [
+    "GPytorchAgent",
+    "SmtAgent",
+    "MultiOutputSmtAgent",
+    "MultiOutputSklearnAgent",
+]
 
 
 class Agent:
@@ -11,7 +17,7 @@ class Agent:
         raise NotImplementedError()
 
     @property
-    def current_memory_size(self):
+    def current_mem_size(self):
         raise NotImplementedError()
 
     def predict(self, X_test: Tensor):
