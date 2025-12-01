@@ -4,6 +4,7 @@ from torch import Tensor
 from smt.surrogate_models import GPX
 from typing import List
 from sgp_cell.common.objectives import compute_aic
+from sklearn.preprocessing import StandardScaler
 
 
 class MultiOutputSmtAgent:
@@ -15,8 +16,10 @@ class MultiOutputSmtAgent:
         ini_y: Tensor,
         model_kwargs: dict,
         param_coeff=0.1,
+        standardize=False,
     ):
         ini_X, ini_y = torch.atleast_2d(ini_X), torch.atleast_2d(ini_y)
+        self.standardize = standardize
 
         self.in_dim, self.out_dim = ini_X.size(-1), ini_y.size(-1)
         self.X_train = ini_X.clone()
@@ -34,18 +37,39 @@ class MultiOutputSmtAgent:
         X_train = X_train.numpy()
         y_train = y_train.numpy()
         models = []
+        scalings = []
         for i in range(self.out_dim):
             sm = GPX(print_global=False, **self.model_kwargs)
             sm.set_training_values(X_train, y_train[:, i])
             sm.train()
             models += [sm]
-        return models
+            feature_scaler = StandardScaler()
+            feature_scaler.fit(X_train)
+            target_scaler = StandardScaler()
+            target_scaler.fit(y_train)
+            var_scaler = StandardScaler(with_mean=False)
+            var_scaler.fit(y_train)
+            scalings += [(feature_scaler, target_scaler, var_scaler)]
+        return models, scalings
 
-    def _predict(self, models: List[GPX], X_test: np.ndarray):
+    def _predict(
+        self, models: tuple[List[GPX], List[StandardScaler]], X_test: np.ndarray
+    ):
         pred_values, pred_variances = [], []
-        for m in models:
-            pred_values += [m.predict_values(X_test)]
-            pred_variances += [m.predict_variances(X_test)]
+        for m, (feature_scaler, target_scaler, var_scaler) in zip(*models):
+            X_z = feature_scaler.transform(X_test)
+            if self.standardize:
+                y_pred = target_scaler.inverse_transform(
+                    m.predict_values(X_z).reshape(-1, 1)
+                )
+                y_pred_var = var_scaler.inverse_transform(
+                    m.predict_variances(X_z).reshape(-1, 1)
+                )
+            else:
+                y_pred = m.predict_values(X_z)
+                y_pred_var = m.predict_variances(X_z).reshape(-1, 1)
+            pred_values += [y_pred]
+            pred_variances += [y_pred_var]
         return np.stack(pred_values, axis=1), np.stack(pred_variances, axis=1)
 
     def predict(self, X_test: Tensor):
@@ -75,8 +99,8 @@ class MultiOutputSmtAgent:
     def _likelihoods(self, models: List[GPX]):
         return np.stack([m._gpx.likelihoods() for m in models])
 
-    def loss(self, model: List[GPX], X: Tensor, y: Tensor):
-        log_likelihood = np.log(self._likelihoods(model)).mean()
+    def loss(self, model: tuple[List[GPX], List[StandardScaler]], X: Tensor, y: Tensor):
+        log_likelihood = np.log(self._likelihoods(model[0])).mean()
         l = compute_aic(X.size(0), log_likelihood, alpha=self.param_coef)
         return l
 
