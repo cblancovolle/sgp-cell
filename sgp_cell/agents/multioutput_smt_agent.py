@@ -57,17 +57,17 @@ class MultiOutputSmtAgent:
     ):
         pred_values, pred_variances = [], []
         for m, (feature_scaler, target_scaler, var_scaler) in zip(*models):
-            X_z = feature_scaler.transform(X_test)
             if self.standardize:
+                X_z = feature_scaler.transform(X_test)
                 y_pred = target_scaler.inverse_transform(
-                    m.predict_values(X_z).reshape(-1, 1)
+                    m.predict_values(X_z).reshape(1, 1)
                 )
                 y_pred_var = var_scaler.inverse_transform(
-                    m.predict_variances(X_z).reshape(-1, 1)
+                    m.predict_variances(X_z).reshape(1, 1)
                 )
             else:
-                y_pred = m.predict_values(X_z)
-                y_pred_var = m.predict_variances(X_z).reshape(-1, 1)
+                y_pred = m.predict_values(X_test)
+                y_pred_var = m.predict_variances(X_test).reshape(-1, 1)
             pred_values += [y_pred]
             pred_variances += [y_pred_var]
         return np.stack(pred_values, axis=1), np.stack(pred_variances, axis=1)
