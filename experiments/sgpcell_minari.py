@@ -275,7 +275,7 @@ for ep_id, ep in enumerate(train_dataset):
             log_entry(log_path, infos)
 
             pbar.set_description(f"[Ep {ep_id} - Agents {trainer.n_agents}]")
-            if step % eval_freq == 0:
+            if step % eval_freq == 500:
                 eval_infos = evaluate(trainer, test_dataset)
                 eval_infos["step"] = step
                 eval_infos["n_retained"] = np.sum(
